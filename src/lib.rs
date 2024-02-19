@@ -1,3 +1,7 @@
+mod mmu;
+
+use crate::mmu::Mmu;
+
 /// Los registros de 8bits la CPU
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -39,7 +43,6 @@ pub enum RegAddr {
     HLMinus,
     BC,
     DE,
-    Imm,
 }
 
 impl RegAddr {
@@ -68,13 +71,13 @@ pub enum InstrKind {
     /// Arithmetic/logical
     AddRegReg = 7,
     AddRegImm = 8,
-    AddRegMem = 9,
+    AddMemReg = 9,
     AddWRegWReg = 10,
     AddWRegImm = 11,
 
     AdcRegReg = 12,
     AdcRegImm = 13,
-    AdcRegMem = 14,
+    AdcMemReg = 14,
 
     SubReg = 15,
     SubImm = 16,
@@ -110,8 +113,53 @@ pub enum InstrKind {
 
     /// Advanced loads / stack
     LdWRegImm = 40,
-    Push = 41,
-    Pop = 42,
+    LdMemImmReg = 41,
+    Push = 42,
+    Pop = 43,
+    AddSPImm = 44,
+
+    /// Jumps
+    JPImm = 45,
+    JPCond = 46,
+    JPReg = 47,
+    JRelImm = 48,
+    JRelCond = 49,
+    Rst = 50,
+
+    /// Bit manipulation
+    RlcA = 51,
+    RlA = 52,
+    RrcA = 53,
+    RrA = 54,
+
+    /// Prefixed instrucctions 0xCB
+    RlcReg = 55,
+    RlcMem = 56,
+    RrcReg = 57,
+    RrcMem = 58,
+    RlReg = 59,
+    RlMem = 60,
+    RrReg = 61,
+    RrMem = 62,
+    SlaReg = 63,
+    SlaMem = 64,
+    SraReg = 65,
+    SraMem = 66,
+    SwapReg = 67,
+    SwapMem = 68,
+    SrlReg = 69,
+    SrlMem = 70,
+    BitReg = 71,
+    BitMem = 72,
+    ResReg = 73,
+    ResMem = 74,
+    SetReg = 75,
+    SetMem = 76,
+
+    /// Calls and returns
+    Ret,
+    RetCond,
+    Reti,
 }
 
 impl InstrKind {
@@ -140,13 +188,13 @@ pub enum Instr {
     /// Arithmetic/logical operations
     AddRegReg { src: Reg, dst: Reg },
     AddRegImm { src: u8,  dst: Reg },
-    AddRegMem { src: RegAddr, dst: Reg },
+    AddMemReg { src: RegAddr, dst: Reg },
     AddWRegWReg { src: Reg, dst: Reg },
     AddWRegImm { src: u8, dst: Reg },
 
     AdcRegReg { src: Reg, dst: Reg },
     AdcRegImm { src: u8, dst: Reg },
-    AdcRegMem { src: RegAddr, dst: Reg },
+    AdcMemReg { src: RegAddr, dst: Reg },
 
     SubReg { src: Reg },
     SubImm { src: u8 },
@@ -178,8 +226,40 @@ pub enum Instr {
     CpMem { src: RegAddr },
 
     LdWRegImm { src: u16, dst: Reg },
+    LdMemImmReg { src: Reg, dst: u16 },
     Push { src: Reg },
     Pop { dst: Reg },
+
+    JPImm { addr: u16 },
+    JPCond { cond: u8, addr: u16 },
+    JPReg { src: Reg },
+    JRelImm { offset: u8 },
+    JRelCond { cond: u8, offset: u8 },
+    Rst { addr: u8 },
+
+    RlcReg { reg: Reg },
+    RlcMem { reg: RegAddr },
+    RrcReg { reg: Reg },
+    RrcMem { reg: RegAddr },
+    RlReg { reg: Reg },
+    RlMem { reg: RegAddr },
+    RrReg { reg: Reg },
+    RrMem { reg: RegAddr },
+    SlaReg { reg: Reg },
+    SlaMem { reg: RegAddr },
+    SraReg { reg: Reg },
+    SraMem { reg: RegAddr },
+    SwapReg { reg: Reg }, 
+    SwapMem { reg: RegAddr }, 
+    SrlReg { reg: Reg }, 
+    SrlMem { reg: RegAddr },
+    BitReg { reg: Reg, bit: u8 },
+    BitMem { reg: RegAddr, bit: u8 },
+    ResReg { reg: Reg, bit: u8 },
+    ResMem { reg: RegAddr, bit: u8 },
+    SetReg { reg: Reg, bit: u8 },
+    SetMem { reg: RegAddr, bit: u8 },
+
 }
 
 #[derive(Debug)]
@@ -214,10 +294,10 @@ const FLAG_C: u8 = 1 << 4;
 /// Esta tabla se usa para discernir el tipo de instrucción `InstrKind` que 
 /// luego se convierte a `Instr` accediendo a las otras tablas
 const INST_KIND_TABLE: &[u8] = &[
-    0, 0, 4, 0, 0, 0, 3, 0, 0,10, 5, 0, 0, 0, 3, 0,
-    0, 0, 4, 0, 0, 0, 3, 0, 0,10, 5, 0, 0, 0, 3, 0,
-    0, 0, 4, 0, 0, 0, 3, 0, 0,10, 5, 0, 0, 0, 3, 0,
-    0, 0, 4, 0, 0, 0, 3, 0, 0,10, 5, 0, 0, 0, 3, 0,
+    0,40, 4, 0, 0, 0, 3, 0, 0,10, 5, 0, 0, 0, 3, 0,
+    0,40, 4, 0, 0, 0, 3, 0,48,10, 5, 0, 0, 0, 3, 0,
+   49,40, 4, 0, 0, 0, 3, 0,49,10, 5, 0, 0, 0, 3, 0,
+   49,40, 4, 0, 0, 0, 3, 0,49,10, 5, 0, 0, 0, 3, 0,
     2, 2, 2, 2, 2, 2, 5, 2, 2, 2, 2, 2, 2, 2, 5, 2,
     2, 2, 2, 2, 2, 2, 5, 2, 2, 2, 2, 2, 2, 2, 5, 2,
     2, 2, 2, 2, 2, 2, 5, 2, 2, 2, 2, 2, 2, 2, 5, 2,
@@ -226,11 +306,16 @@ const INST_KIND_TABLE: &[u8] = &[
    15,15,15,15,15,15,17,15,18,18,18,18,18,18,18,18,
    21,21,21,21,21,21,23,21,24,24,24,24,24,24,24,24,
    27,27,27,27,27,27,27,28, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 2, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0,13, 0,
-    0, 0, 4, 0, 0, 0,16, 0, 0, 0, 0, 0, 0, 0,19, 0,
-    0, 0, 0, 0, 0, 0,22, 0,11, 0, 0, 0, 0, 0,25, 0,
-    0, 0, 0, 0, 0, 0,28, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0,43, 0,46,45,42, 9, 0, 0, 0, 0,46, 0, 0,13, 0,
+    0,43, 0,46, 0,42,16, 0, 0, 0, 0,46, 0, 0,19, 0,
+    0,43, 0, 0, 0,42,22, 0,11, 0,47, 0, 0, 0,25, 0,
+    0,43, 0, 0, 0,42,28, 0, 0, 0,10, 0, 0, 0, 0, 0,
 ];
+
+const NZ: u8 = FLAG_N | FLAG_Z;
+const NC: u8 = FLAG_N | FLAG_C;
+const Z:  u8 = FLAG_Z;
+const C:  u8 = FLAG_C;
 
 /// Tabla usada para discernir el operando de entrada de la instrucción, sus
 /// valores son convertibles directamente a los enums `Reg` y `RegMem`, en 
@@ -238,8 +323,8 @@ const INST_KIND_TABLE: &[u8] = &[
 const SRC_TABLE: &[u8] = &[
     0, 0, 1, 3, 3, 3, 0, 0, 9, 3,13, 3, 4, 3, 0, 0,
     0, 0, 1, 5, 5, 5, 0, 0, 0, 5,14, 5, 6, 5, 0, 0,
-    0, 0, 1, 7, 7, 7, 0, 0, 0, 7,11, 7, 8, 8, 0, 0,
-    0, 0, 1, 9,10,10, 0, 0, 0, 9,12, 9, 1, 1, 0, 0,
+   NZ, 0, 1, 7, 7, 7, 0, 0, Z, 7,11, 7, 8, 8, 0, 0,
+   NC, 0, 1, 9,10,10, 0, 0, C, 9,12, 9, 1, 1, 0, 0,
     3, 3, 4, 6, 7, 8,10, 1, 3, 4, 5, 6, 7, 8,10, 1,
     3, 4, 5, 6, 7, 8,10, 1, 3, 4, 5, 6, 7, 8,10, 1,
     3, 4, 5, 6, 7, 8,10, 1, 3, 4, 5, 6, 7, 8,10, 1,
@@ -248,10 +333,10 @@ const SRC_TABLE: &[u8] = &[
     3, 4, 5, 6, 7, 8,10, 1, 3, 4, 5, 6, 7, 8,10, 1,
     3, 4, 5, 6, 7, 8,10, 1, 3, 4, 5, 6, 7, 8,10, 1,
     3, 4, 5, 6, 7, 8,10, 1, 3, 4, 5, 6, 7, 8,10, 1,
-    0, 3, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 5, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+   NZ, 3,NZ, 0, 0, 3, 0, 0, Z, 0, Z, 0, Z, 0, 0, 0,
+   NC, 5,NC, 0, 0, 5, 0, 0, C, 0, C, 0, C, 0, 0, 0,
     0, 7, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0,
 ];
 
 /// Tabla usada para discernir el operando destino
@@ -271,7 +356,67 @@ const DST_TABLE: &[u8] = &[
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 9, 0, 0, 0, 0, 0,
+];
+
+/// Tabla usada para discernir el operando destino
+const PREFIX_TABLE: &[u8] = &[
+   55,55,55,55,55,55,56,55,57,57,57,57,57,57,58,57,
+   59,59,59,59,59,59,60,59,61,61,61,61,61,61,62,61,
+   63,63,63,63,63,63,64,63,65,65,65,65,65,65,66,65,
+   67,67,67,67,67,67,68,67,69,69,69,69,69,69,70,69,
+   71,71,71,71,71,71,71,71,73,73,73,73,73,73,73,73,
+   75,75,75,75,75,75,75,75,77,77,77,77,77,77,77,77,
+   79,79,79,79,79,79,79,79,81,81,81,81,81,81,81,81,
+   83,83,83,83,83,83,83,83,85,85,85,85,85,85,85,85,
+   87,87,87,87,87,87,87,87,89,89,89,89,89,89,89,89,
+   91,91,91,91,91,91,91,91,93,93,93,93,93,93,93,93,
+   95,95,95,95,95,95,95,95,97,97,97,97,97,97,97,97,    
+    0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 9, 0, 0, 0, 0, 0,
+];
+
+/// Tabla usada para discernir el operando destino
+const PREFIX_SRC_TABLE: &[u8] = &[
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+   0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
+   2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
+   4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5,
+   6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7,
+   0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
+   2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
+   4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5,
+   6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7,
+   0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
+   2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
+   4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5,
+   6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7,
+];
+
+/// Tabla usada para discernir el operando destino
+const PREFIX_DST_TABLE: &[u8] = &[
+   3, 4, 5, 6, 7, 8, 10, 1, 3, 4, 5, 6, 7, 8, 10, 1,
+   3, 4, 5, 6, 7, 8, 10, 1, 3, 4, 5, 6, 7, 8, 10, 1,
+   3, 4, 5, 6, 7, 8, 10, 1, 3, 4, 5, 6, 7, 8, 10, 1,
+   3, 4, 5, 6, 7, 8, 10, 1, 3, 4, 5, 6, 7, 8, 10, 1,
+   3, 4, 5, 6, 7, 8, 10, 1, 3, 4, 5, 6, 7, 8, 10, 1,
+   3, 4, 5, 6, 7, 8, 10, 1, 3, 4, 5, 6, 7, 8, 10, 1,
+   3, 4, 5, 6, 7, 8, 10, 1, 3, 4, 5, 6, 7, 8, 10, 1,
+   3, 4, 5, 6, 7, 8, 10, 1, 3, 4, 5, 6, 7, 8, 10, 1,
+   3, 4, 5, 6, 7, 8, 10, 1, 3, 4, 5, 6, 7, 8, 10, 1,
+   3, 4, 5, 6, 7, 8, 10, 1, 3, 4, 5, 6, 7, 8, 10, 1,
+   3, 4, 5, 6, 7, 8, 10, 1, 3, 4, 5, 6, 7, 8, 10, 1,
+   3, 4, 5, 6, 7, 8, 10, 1, 3, 4, 5, 6, 7, 8, 10, 1,
+   3, 4, 5, 6, 7, 8, 10, 1, 3, 4, 5, 6, 7, 8, 10, 1,
+   3, 4, 5, 6, 7, 8, 10, 1, 3, 4, 5, 6, 7, 8, 10, 1,
+   3, 4, 5, 6, 7, 8, 10, 1, 3, 4, 5, 6, 7, 8, 10, 1,
+   3, 4, 5, 6, 7, 8, 10, 1, 3, 4, 5, 6, 7, 8, 10, 1,
 ];
 
 /// Detiene la ejecución del programa (sleep) durante una cantidad de tiempo
@@ -367,7 +512,7 @@ impl Cpu {
 
                 let dst = Reg::from_u8(dst);
 
-                Some(Instr::LdRegImm { src: imm, dst })        
+                Some(Instr::$variant { src: imm, dst })        
             }}
         }
 
@@ -383,7 +528,7 @@ impl Cpu {
                 let src = Reg::from_u8(src);
                 let dst = RegAddr::from_u8(dst);
 
-                Some(Instr::LdRegMem { src, dst })
+                Some(Instr::$variant { src, dst })
             }}
         }
 
@@ -400,11 +545,74 @@ impl Cpu {
                 let src = RegAddr::from_u8(src);
                 let dst = Reg::from_u8(dst);
 
-                Some(Instr::LdMemReg { src, dst })
+                Some(Instr::$variant { src, dst })
             }}
         }
 
-        match InstrKind::from_u8(INST_KIND_TABLE[opcode as usize]) {
+        macro_rules! prefix_decode_reg {
+            ($loc:ident, $variant:ident) => {{
+                // Extraer registro
+                let $loc = PREFIX_DST_TABLE[opcode as usize];
+
+                assert!($loc != 0);
+
+                let $loc = Reg::from_u8($loc);
+
+                Some(Instr::$variant { $loc })
+            }};
+        }
+
+        macro_rules! prefix_decode_mem {
+            ($loc:ident, $variant:ident) => {{
+                // Extraer registro
+                let $loc = PREFIX_DST_TABLE[opcode as usize];
+
+                assert!($loc != 0);
+
+                let $loc = RegAddr::from_u8($loc);
+
+                Some(Instr::$variant { $loc })            
+            }};
+        }
+
+        macro_rules! prefix_decode_reg_imm {
+            ($reg_loc:ident, $imm_loc:ident, $variant:ident) => {{
+                // Extraer immediate
+                let imm = instructions[self.pc as usize];
+                self.pc += 1;
+                
+                // Extraer registro destino
+                let dst = PREFIX_DST_TABLE[opcode as usize];
+
+                assert!(dst != 0);
+
+                let dst = Reg::from_u8(dst);
+
+                Some(Instr::$variant { $imm_loc: imm, $reg_loc: dst })
+            }}
+        }
+
+        macro_rules! prefix_decode_mem_imm {
+            ($mem_loc:ident, $imm_loc:ident, $variant:ident) => {{
+                // Extraer immediate
+                let imm = instructions[self.pc as usize];
+                self.pc += 1;
+                
+                // Extraer registro como mem destino
+                let dst = PREFIX_DST_TABLE[opcode as usize];
+
+                assert!(dst != 0);
+
+                let dst = RegAddr::from_u8(dst);
+
+                Some(Instr::$variant { $imm_loc: imm, $mem_loc: dst })
+            }}
+        }
+
+        let mut res;
+
+        // Common (unprefixed) instructions
+        res = match InstrKind::from_u8(INST_KIND_TABLE[opcode as usize]) {
             InstrKind::Halt => Some(Instr::Halt),
             InstrKind::LdRegReg => decode_reg_reg!(LdRegReg),
             InstrKind::LdRegImm => decode_reg_imm!(LdRegImm),
@@ -412,11 +620,11 @@ impl Cpu {
             InstrKind::LdMemReg => decode_mem_reg!(LdMemReg),
             InstrKind::AddRegReg => decode_reg_reg!(AddRegReg),
             InstrKind::AddRegImm => decode_reg_imm!(AddRegImm),
-            InstrKind::AddRegMem => decode_reg_mem!(AddRegMem),
+            InstrKind::AddMemReg => decode_mem_reg!(AddMemReg),
             InstrKind::AddWRegWReg => decode_reg_reg!(AddWRegWReg),
             InstrKind::AdcRegReg => decode_reg_reg!(AdcRegReg),
             InstrKind::AdcRegImm => decode_reg_imm!(AdcRegImm),
-            InstrKind::AdcRegMem => decode_reg_mem!(AdcRegMem),
+            InstrKind::AdcMemReg => decode_mem_reg!(AdcMemReg),
             InstrKind::SubReg => decode_reg!(src, SubReg),
             InstrKind::SubImm => decode_imm!(src, SubImm),
             InstrKind::SubMem => decode_mem!(src, SubMem),
@@ -444,7 +652,7 @@ impl Cpu {
                 self.pc += 1;
                 let imml = instructions[self.pc as usize];
                 self.pc += 1;
-                let imm = u16::from_ne_bytes([immh, imml]);
+                let imm = u16::from_le_bytes([immh, imml]);
                 
                 // Extraer registro destino
                 let dst = DST_TABLE[opcode as usize];
@@ -455,10 +663,96 @@ impl Cpu {
 
                 Some(Instr::LdWRegImm { src: imm, dst })
             },
+            InstrKind::LdMemImmReg => {
+                // Extraer immediate
+                let immh = instructions[self.pc as usize];
+                self.pc += 1;
+                let imml = instructions[self.pc as usize];
+                self.pc += 1;
+                let imm = u16::from_le_bytes([immh, imml]);
+
+                // Extraer registro origen
+                let src = SRC_TABLE[opcode as usize];
+
+                assert!(src != 0);
+
+                let src = Reg::from_u8(src);
+
+                Some(Instr::LdMemImmReg { src, dst: imm })
+            }
             InstrKind::Push => decode_reg!(src, Push),
             InstrKind::Pop  => decode_reg!(dst, Pop),
+            InstrKind::JPImm => {
+                // Extraer immediate
+                let immh = instructions[self.pc as usize];
+                self.pc += 1;
+                let imml = instructions[self.pc as usize];
+                self.pc += 1;
+                let imm = u16::from_le_bytes([immh, imml]);
+
+                Some(Instr::JPImm { addr: imm })
+            },
+            InstrKind::JPCond => {
+                // Extraer immediate
+                let immh = instructions[self.pc as usize];
+                self.pc += 1;
+                let imml = instructions[self.pc as usize];
+                self.pc += 1;
+                let imm = u16::from_le_bytes([immh, imml]);
+                
+                // Extraer condition
+                let cond = SRC_TABLE[opcode as usize];
+
+                assert!(cond != 0);
+
+                Some(Instr::JPCond { cond, addr: imm })
+            },
+            InstrKind::JPReg => decode_reg!(src, JPReg),
+            InstrKind::JRelImm => decode_imm!(offset, JRelImm),
+            InstrKind::JRelCond => {
+                // Extraer immediate
+                let imm = instructions[self.pc as usize];
+                self.pc += 1;
+
+                // Extraer condition
+                let cond = SRC_TABLE[opcode as usize];
+
+                assert!(cond != 0);
+
+                Some(Instr::JRelCond { cond, offset: imm })
+            },
+
             _ => { None }
-        }
+        };
+
+        // Prefixed instructions
+        res = if res.is_none() && opcode == 0xCB {
+            match InstrKind::from_u8(PREFIX_TABLE[opcode as usize]) {
+                InstrKind::RlcReg => prefix_decode_reg!(reg, RlcReg),
+                InstrKind::RlcMem => prefix_decode_mem!(reg, RlcMem),
+                InstrKind::RrcReg => prefix_decode_reg!(reg, RrcReg),
+                InstrKind::RrcMem => prefix_decode_mem!(reg, RrcMem),
+                InstrKind::RlReg => prefix_decode_reg!(reg, RlReg),
+                InstrKind::RlMem => prefix_decode_mem!(reg, RlMem),
+                InstrKind::RrReg => prefix_decode_reg!(reg, RrReg),
+                InstrKind::RrMem => prefix_decode_mem!(reg, RrMem),
+                InstrKind::SlaReg => prefix_decode_reg!(reg, SlaReg),
+                InstrKind::SlaMem => prefix_decode_mem!(reg, SlaMem),
+                InstrKind::SraReg => prefix_decode_reg!(reg, SraReg),
+                InstrKind::SraMem => prefix_decode_mem!(reg, SraMem),
+                InstrKind::BitReg => prefix_decode_reg_imm!(reg, bit, BitReg),
+                InstrKind::BitMem => prefix_decode_mem_imm!(reg, bit, BitMem),
+                InstrKind::ResReg => prefix_decode_reg_imm!(reg, bit, ResReg),
+                InstrKind::ResMem => prefix_decode_mem_imm!(reg, bit, ResMem),
+                InstrKind::SetReg => prefix_decode_reg_imm!(reg, bit, SetReg),
+                InstrKind::SetMem => prefix_decode_mem_imm!(reg, bit, SetMem),
+                _ => None,
+            }
+        } else {
+           unreachable!()
+        };
+        
+        res
     }
 
     /// Escribir en un registro de 8-bits
@@ -493,7 +787,7 @@ impl Cpu {
         }
         
         let reg_range = (reg as usize - 1)..=reg as usize;
-        u16::from_ne_bytes(self.registers[reg_range].try_into().unwrap())
+        u16::from_le_bytes(self.registers[reg_range].try_into().unwrap())
     }
 
     /// Escribir en dos registros que forman un valor de 16-bits, solo se puede
@@ -507,7 +801,7 @@ impl Cpu {
             panic!("Cannot wide write into this register {:?}", reg);
         }
 
-        let [l, h] = u16::to_ne_bytes(value);
+        let [l, h] = u16::to_le_bytes(value);
         self.registers[reg as usize - 1] = l;
         self.registers[reg as usize] = h;
     }
@@ -596,7 +890,7 @@ impl Cpu {
         res
     }
 
-    /// Restar dos valores de 8-bits de la alu    
+    /// Restar dos valores de 8-bits de la alu
     #[inline]
     fn alu_sub(&mut self, a: u8, b: u8) -> u8 {
         // Realizar la operación y decidir que flags se activan
@@ -692,6 +986,192 @@ impl Cpu {
         res
     }
 
+    #[inline]
+    fn alu_rlc(&mut self, a: u8) -> u8 {
+        // Hacer la operación rotate por 1 a izquierda
+        let res = a.rotate_left(1);
+
+        // Extraer y aplicar los flags
+        let carry = a >> 7 == 1;
+        let zero = res == 0;
+        let mut flags = 0;
+        if carry {
+            flags |= FLAG_C;
+        }
+        if zero {
+            flags |= FLAG_Z;
+        }
+        self.write_reg(Reg::F, flags);
+
+        res
+    }
+
+    #[inline]
+    fn alu_rrc(&mut self, a: u8) -> u8 {
+        // Hacer la operación rotate por 1 a derecha
+        let res = a.rotate_right(1);
+
+        // Extraer y aplicar los flags
+        let carry = a & 0b11111110 == 1;
+        let zero = res == 0;
+        let mut flags = 0;
+        if carry {
+            flags |= FLAG_C;
+        }
+        if zero {
+            flags |= FLAG_Z;
+        }
+        self.write_reg(Reg::F, flags);
+
+        res
+    }
+
+    #[inline]
+    fn alu_rl(&mut self, a: u8) -> u8 {
+        // Extraer la carry flag
+        let carry = (self.read_reg(Reg::F) & FLAG_C != 0) as u8;
+
+        // Hacer la operación rotate por 1 a izquierda
+        let res = a.rotate_left(carry as u32);
+
+        // Extraer y aplicar los flags
+        let carry = a >> 7 == 1;
+        let zero = res == 0;
+        let mut flags = 0;
+        if carry {
+            flags |= FLAG_C;
+        }
+        if zero {
+            flags |= FLAG_Z;
+        }
+        self.write_reg(Reg::F, flags);
+
+        res
+    }
+
+    #[inline]
+    fn alu_rr(&mut self, a: u8) -> u8 {
+        // Extraer la carry flag
+        let carry = (self.read_reg(Reg::F) & FLAG_C != 0) as u8 ;
+
+        // Hacer la operación rotate por 1 a izquierda
+        let res = a.rotate_right(carry as u32);
+
+        // Extraer y aplicar los flags
+        let carry = a & 0b11111110 == 1;
+        let zero = res == 0;
+        let mut flags = 0;
+        if carry {
+            flags |= FLAG_C;
+        }
+        if zero {
+            flags |= FLAG_Z;
+        }
+        self.write_reg(Reg::F, flags);
+
+        res
+    }
+
+    #[inline]
+    fn alu_sla(&mut self, a: u8) -> u8 {
+        // Hacer la operación shift por 1 a izquierda
+        let (res, carry) = a.overflowing_shl(1);
+
+        // Extraer y aplicar los flags
+        let zero = res == 0;
+        let mut flags = 0;
+        if carry {
+            flags |= FLAG_C;
+        }
+        if zero {
+            flags |= FLAG_Z;
+        }
+        self.write_reg(Reg::F, flags);
+
+        res
+    }
+
+    #[inline]
+    fn alu_sra(&mut self, a: u8) -> u8 {
+        // Hacer la operación shift por 1 a derecha
+        let (mut res, carry) = a.overflowing_shr(1);
+        res |= a & 0b10000000;
+
+        // Extraer y aplicar los flags
+        let zero = res == 0;
+        let mut flags = 0;
+        if carry {
+            flags |= FLAG_C;
+        }
+        if zero {
+            flags |= FLAG_Z;
+        }
+        self.write_reg(Reg::F, flags);
+
+        res
+    }
+
+    #[inline]
+    fn alu_swap(&mut self, a: u8) -> u8 {
+        // Intercambiar los nimbles
+        let hnimble = a >> 4;
+        let lnimble = a & 0b11110000;
+        let res = (lnimble << 4) | hnimble;
+     
+        // Extraer y aplicar los flags
+        let zero = res == 0;
+        let mut flags = 0;
+        if zero {
+            flags |= FLAG_Z;
+        }
+        self.write_reg(Reg::F, flags);
+
+        res
+    }
+
+    #[inline]
+    fn alu_srl(&mut self, a: u8) -> u8 {
+        // Hacer la operación shift por 1 a derecha
+        let (res, carry) = a.overflowing_shr(1);
+
+        // Extraer y aplicar los flags
+        let zero = res == 0;
+        let mut flags = 0;
+        if carry {
+            flags |= FLAG_C;
+        }
+        if zero {
+            flags |= FLAG_Z;
+        }
+        self.write_reg(Reg::F, flags);
+
+        res
+    }
+
+    #[inline]
+    fn alu_bit(&mut self, a: u8, bit: u8) {
+        // Comprobar si el bit `bit` es cero
+        let is_zero = a & (1 << bit) == 0;
+
+        // Aplicar los flags necesarios
+        let old_carry = self.read_reg(Reg::F);
+        let mut flags = old_carry | FLAG_H;
+        if is_zero {
+            flags |= FLAG_Z;
+        }
+        self.write_reg(Reg::F, flags);
+    }
+
+    #[inline]
+    fn alu_res(&mut self, a: u8, bit: u8) -> u8 {
+        a & !(1 << bit)
+    }
+
+    #[inline]
+    fn alu_set(&mut self, a: u8, bit: u8) -> u8 {
+        a | (1 << bit)
+    }
+
     // TODO: A esta función habrá que pasarle la MMU
     pub fn execute(&mut self, instructions: &[u8]) -> Option<()> {
         // Hacer decode de la instrucción a ejecutar
@@ -722,13 +1202,13 @@ impl Cpu {
                 let res = self.alu_add(src, self.read_reg(dst));
                 self.write_reg(dst, res);
             },
-            Instr::AddRegMem { .. } => todo!(),
+            Instr::AddMemReg { .. } => todo!(),
             Instr::AddWRegWReg { src, dst } => {
                 tick!(self, 8);
                 let res = self.alu_wideadd(self.read_widereg(src), 
-                                           self.read_widereg(dst));
+                    self.read_widereg(dst));
                 self.write_widereg(dst, res);
-                    
+
             },
             Instr::AddWRegImm { src, dst } => {
                 tick!(self, 16);
@@ -745,7 +1225,7 @@ impl Cpu {
                 let res = self.alu_adc(src, self.read_reg(dst));
                 self.write_reg(dst, res);
             },
-            Instr::AdcRegMem { .. } => todo!(),
+            Instr::AdcMemReg { .. } => todo!(),
             Instr::SubReg { src } => {
                 tick!(self, 4);
                 let res = self.alu_sub(self.read_reg(Reg::A), self.read_reg(src));
@@ -839,12 +1319,126 @@ impl Cpu {
                 tick!(self, 12);
                 self.write_widereg(dst, src);
             },
+            Instr::LdMemImmReg { .. } => todo!(),
             Instr::Push { src } => {
-                let value = self.read_widereg(src);
+                tick!(self, 16);
+                let _value = self.read_widereg(src);
 
                 todo!();
             },
             Instr::Pop { .. } => todo!(),
+            Instr::JPImm { addr } => {
+                tick!(self, 16);
+                self.pc = addr;
+            },
+            Instr::JPCond { cond, addr } => {
+                tick!(self, 12);
+
+                // Comprobar que almenos todos los bits de la condición están
+                // a 1
+                let flags = self.read_reg(Reg::F);
+                if flags & cond != cond {
+                    return Some(());
+                }
+
+                tick!(self, 4);
+
+                self.pc = addr;
+            },
+            Instr::JPReg { .. } => todo!(),
+            Instr::JRelImm { offset } => {
+                tick!(self, 8);
+
+                // Añadir el offset a pc
+                let offset = offset as i16;
+                self.pc = (self.pc as i16 + offset).try_into()
+                    .expect("After a relative jump `pc` is negative");
+            },
+            Instr::JRelCond { cond, offset } => {
+                tick!(self, 8);
+
+                // Comprobar que almenos todos los bits de la condición están
+                // a 1
+                let flags = self.read_reg(Reg::F);
+                if flags & cond != cond {
+                    return Some(());
+                }
+                
+                tick!(self, 4);
+
+                // Añadir el offset a pc
+                let offset = offset as i16;
+                self.pc = (self.pc as i16 + offset).try_into()
+                    .expect("After a relative jump `pc` is negative");
+            },
+            Instr::Rst { addr } => {
+                tick!(self, 8);
+
+                // Mover la dirección actual al stack
+                let [curr_addr_h, curr_addr_l] = self.pc.to_le_bytes();
+                todo!();
+            },
+            Instr::RlcReg { reg } => {
+                tick!(self, 8);
+                let res = self.alu_rlc(self.read_reg(reg));
+                self.write_reg(reg, res);
+            },
+            Instr::RlcMem { .. } => todo!(),
+            Instr::RrcReg { reg } => {
+                tick!(self, 8);
+                let res = self.alu_rrc(self.read_reg(reg));
+                self.write_reg(reg, res);
+            },
+            Instr::RrcMem { .. } => todo!(),
+            Instr::RlReg { reg } => {
+                tick!(self, 8);
+                let res = self.alu_rl(self.read_reg(reg));
+                self.write_reg(reg, res);
+            },
+            Instr::RlMem { .. } => todo!(),
+            Instr::RrReg { reg } => {
+                tick!(self, 8);
+                let res = self.alu_rr(self.read_reg(reg));
+                self.write_reg(reg, res);
+            },
+            Instr::RrMem { .. } => todo!(),
+            Instr::SlaReg { reg } => {
+                tick!(self, 8);
+                let res = self.alu_sla(self.read_reg(reg));
+                self.write_reg(reg, res);
+            },
+            Instr::SlaMem { .. } => todo!(),
+            Instr::SraReg { reg } => {
+                tick!(self, 8);
+                let res = self.alu_sra(self.read_reg(reg));
+                self.write_reg(reg, res);
+            },
+            Instr::SwapReg { reg } => {
+                tick!(self, 8);
+                let res = self.alu_swap(self.read_reg(reg));
+                self.write_reg(reg, res);
+            },
+            Instr::SwapMem { .. } => todo!(),
+            Instr::SrlReg { reg } => {
+                tick!(self, 8);
+                let res = self.alu_srl(self.read_reg(reg));
+                self.write_reg(reg, res);
+            },
+            Instr::BitReg { reg, bit } => {
+                tick!(self, 8);
+                self.alu_bit(self.read_reg(reg), bit);
+            },
+            Instr::BitMem { .. } => todo!(),
+            Instr::ResReg { reg, bit } => {
+                tick!(self, 8);
+                self.alu_res(self.read_reg(reg), bit);
+            },
+            Instr::ResMem { .. } => todo!(),
+            Instr::SetReg { reg, bit } => {
+                tick!(self, 8);
+                self.alu_set(self.read_reg(reg), bit);
+            },
+            Instr::SetMem { .. } => todo!(), 
             _ => todo!()
         }
 
